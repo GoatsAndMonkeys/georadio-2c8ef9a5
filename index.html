@@ -115,13 +115,25 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
   function showWhere() {
     if (!here) { $("where").textContent = "no location yet"; return; }
     const age = Math.round((Date.now() - (here.t || Date.now())) / 60000);
-    $("where").textContent = `${here.lat.toFixed(4)}, ${here.lon.toFixed(4)}` + (age > 1 ? ` · ${age} min ago` : "");
+    $("where").textContent = `${here.lat.toFixed(4)}, ${here.lon.toFixed(4)}` + (here.acc ? ` ±${Math.round(here.acc)} m` : "") + (age > 1 ? ` · ${age} min ago` : "");
+  }
+
+  // Ask the phone for a fresh fix (up to 12 s). Falls back to the watch's last fix.
+  function freshFix() {
+    return new Promise((resolve) => {
+      if (!("geolocation" in navigator)) return resolve(here);
+      navigator.geolocation.getCurrentPosition((p) => {
+        here = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
+        store.set("georadio.last", here); showWhere(); resolve(here);
+      }, (e) => { status("Location: " + e.message + (here ? " (using last known spot)" : ""), true); resolve(here); },
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 12000 });
+    });
   }
 
   function watchLocation() {
     if (!("geolocation" in navigator)) { status("This browser can't share location.", true); return; }
     navigator.geolocation.watchPosition((p) => {
-      here = { lat: p.coords.latitude, lon: p.coords.longitude, t: Date.now() };
+      here = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
       store.set("georadio.last", here);
       showWhere();
     }, (e) => status("Location: " + e.message + (here ? " (using last known spot)" : ""), true),
@@ -135,23 +147,24 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
       for (let di = -r; di <= r; di++) for (let dj = -r; dj <= r; dj++) {
         if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
         const cell = grid.cells[`${i0 + di}_${j0 + dj}`];
-        if (cell && cell.length) return cell;
+        if (cell && cell.length) return { cell, km: Math.hypot(di, dj * Math.cos(lat * Math.PI / 180)) * 111.2 / grid.step };
       }
     }
     return null;
   }
 
   function pick() {
-    const spot = here || { lat: 40.8094, lon: -73.9480 };  // Harlem until GPS answers
-    const cell = findCell(spot.lat, spot.lon);
-    if (!cell) return null;
+    if (!here) return null;
+    const found = findCell(here.lat, here.lon);
+    if (!found) return null;
+    const cell = found.cell;
     const history = store.get("georadio.history", []);
     let pool = cell.filter(([n]) => !history.includes(n) && grid.songs[n - 1].p);
     if (!pool.length) pool = cell.filter(([n]) => grid.songs[n - 1].p);
     if (!pool.length) return null;
     const [n, w] = pool[Math.floor(Math.random() * Math.min(4, pool.length))];
     store.set("georadio.history", [n, ...history].slice(0, HISTORY));
-    return { ...grid.songs[n - 1], n, why: grid.whys[w - 1] || "" };
+    return { ...grid.songs[n - 1], n, why: grid.whys[w - 1] || "", km: found.km };
   }
 
   function show(song) {
@@ -171,12 +184,15 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
   }
 
   async function next() {
+    status("Getting your location…");
+    await freshFix();
+    if (!here) { status("No location yet. Allow location for Safari: Settings → Privacy → Location Services → Safari Websites → While Using.", true); $("start").hidden = false; return; }
     const song = pick();
-    if (!song) { status("No songs near here yet. Geo Radio covers NYC and Westchester.", true); return; }
+    if (!song) { status("No songs within 20 km of you yet. Geo Radio covers NYC and Westchester.", true); return; }
     current = song;
     show(song);
     audio.src = song.p;
-    try { await audio.play(); status(""); }
+    try { await audio.play(); status(song.km > 0.4 ? `Nearest songs: ${song.km.toFixed(1)} km away` : "Song for your block"); }
     catch (e) { status("Tap Start to begin playback (" + e.name + ").", true); $("start").hidden = false; }
   }
 
