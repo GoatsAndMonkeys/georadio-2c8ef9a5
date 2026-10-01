@@ -196,8 +196,8 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     catch (e) { status("Tap Start to begin playback (" + e.name + ").", true); $("start").hidden = false; }
   }
 
-  audio.addEventListener("ended", next);
-  audio.addEventListener("error", () => { status("Preview failed to load; skipping.", true); next(); });
+  audio.addEventListener("ended", () => { if (current) next(); });
+  audio.addEventListener("error", () => { if (!current) return; status("Preview failed to load; skipping.", true); next(); });
   audio.addEventListener("timeupdate", () => {
     if (audio.duration) $("progress").style.width = (100 * audio.currentTime / audio.duration) + "%";
   });
@@ -212,6 +212,8 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
 
   $("start").addEventListener("click", async () => {
     $("start").hidden = true; $("pause").hidden = false; $("skip").hidden = false;
+    // iOS only lets a tap start audio: play silence now so later songs may start on their own.
+    if (!started) { audio.src = "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA=="; audio.play().catch(() => {}); }
     status("Loading songs…");
     if (!started) { started = true; watchLocation(); }
     if (!grid) {
