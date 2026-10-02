@@ -99,7 +99,6 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
 <script>
 (function () {
   const GRID_URL = "grid.json";
-  const HISTORY = 40;
   const $ = (id) => document.getElementById(id);
   const audio = $("audio");
   let grid = null, here = null, current = null, started = false;
@@ -140,14 +139,28 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 });
   }
 
-  // The square you're in, or the nearest square with songs (up to ~20 km).
-  function findCell(lat, lon) {
+  // Songs played this session (this tab): no repeats until everything within reach has played.
+  const played = new Set(sessionGet("georadio.played", []));
+  function sessionGet(k, d) { try { const v = sessionStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+  function sessionSet(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  const playable = (n) => !!grid.songs[n - 1].p;
+
+  // Nearest square (up to ~20 km out) that still has an unplayed song; ring by ring,
+  // nearest square first within a ring.
+  function findUnplayed(lat, lon) {
     const i0 = Math.round(lat * grid.step), j0 = Math.round(lon * grid.step);
+    const kx = Math.cos(lat * Math.PI / 180);
     for (let r = 0; r <= 40; r++) {
+      const ring = [];
       for (let di = -r; di <= r; di++) for (let dj = -r; dj <= r; dj++) {
         if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
         const cell = grid.cells[`${i0 + di}_${j0 + dj}`];
-        if (cell && cell.length) return { cell, km: Math.hypot(di, dj * Math.cos(lat * Math.PI / 180)) * 111.2 / grid.step };
+        if (cell && cell.length) ring.push({ cell, km: Math.hypot(di, dj * kx) * 111.2 / grid.step });
+      }
+      ring.sort((a, b) => a.km - b.km);
+      for (const c of ring) {
+        const pool = c.cell.filter(([n]) => playable(n) && !played.has(n));
+        if (pool.length) return { pool, km: c.km };
       }
     }
     return null;
@@ -155,15 +168,16 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
 
   function pick() {
     if (!here) return null;
-    const found = findCell(here.lat, here.lon);
+    let found = findUnplayed(here.lat, here.lon);
+    if (!found && played.size) {  // everything within reach has played: start over
+      played.clear();
+      found = findUnplayed(here.lat, here.lon);
+    }
     if (!found) return null;
-    const cell = found.cell;
-    const history = store.get("georadio.history", []);
-    let pool = cell.filter(([n]) => !history.includes(n) && grid.songs[n - 1].p);
-    if (!pool.length) pool = cell.filter(([n]) => grid.songs[n - 1].p);
-    if (!pool.length) return null;
-    const [n, w] = pool[Math.floor(Math.random() * Math.min(4, pool.length))];
-    store.set("georadio.history", [n, ...history].slice(0, HISTORY));
+    const pool = found.pool;  // best-ranked first; a little shuffle among the top few
+    const [n, w] = pool[Math.floor(Math.random() * Math.min(3, pool.length))];
+    played.add(n);
+    sessionSet("georadio.played", [...played]);
     return { ...grid.songs[n - 1], n, why: grid.whys[w - 1] || "", km: found.km };
   }
 
