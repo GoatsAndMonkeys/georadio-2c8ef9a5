@@ -87,6 +87,7 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     <button type="button" id="pause" hidden>Pause</button>
     <button type="button" id="skip" hidden>Next</button>
     <a class="link" id="full" href="#" target="_blank" rel="noopener" hidden>Open full song in Apple Music</a>
+    <button type="button" id="am" class="link" hidden>Sign in to Apple Music for full songs</button>
   </div>
 
   <p class="status" id="status"></p>
@@ -96,6 +97,7 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
 
 <audio id="audio" preload="auto" playsinline></audio>
 
+<script src="applemusic.js"></script>
 <script>
 (function () {
   const GRID_URL = "grid.json";
@@ -206,6 +208,10 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     current = song;
     show(song);
     audio.src = song.p;
+    if (globalThis.AM && AM.ready && AM.authorized() && song.id) {   // full song, the listener's Apple Music
+      try { audio.pause(); await AM.play(song.id); status("Full song · Apple Music"); return; }
+      catch (e) { status("Apple Music couldn't play this one; preview instead."); }
+    } else if (globalThis.AM && AM.active) AM.stop();
     try { await audio.play(); status(song.km > 0.4 ? `Nearest songs: ${song.km.toFixed(1)} km away` : "Song for your block"); }
     catch (e) { status("Tap Start to begin playback (" + e.name + ").", true); $("start").hidden = false; }
   }
@@ -238,7 +244,18 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     next();
   });
   $("skip").addEventListener("click", next);
-  $("pause").addEventListener("click", () => (audio.paused ? audio.play() : audio.pause()));
+  $("pause").addEventListener("click", () => (globalThis.AM && AM.active ? AM.toggle() : (audio.paused ? audio.play() : audio.pause())));
+  // Apple Music sign-in: full-length songs for subscribers (web/applemusic.js).
+  function amLabel() { $("am").textContent = AM.authorized() ? "Apple Music: full songs on (tap to sign out)" : "Sign in to Apple Music for full songs"; }
+  if (globalThis.AM) {
+    AM.onEnded = () => { if (current) next(); };
+    AM.onTime = (t, d) => { if (d) $("progress").style.width = (100 * t / d) + "%"; };
+    AM.load().then((ok) => { if (ok) { $("am").hidden = false; amLabel(); } });
+    $("am").addEventListener("click", async () => {
+      try { if (AM.authorized()) await AM.signOut(); else await AM.signIn(); } catch (e) { status("Apple Music sign-in didn't finish.", true); }
+      amLabel();
+    });
+  }
   showWhere();
 })();
 </script>
