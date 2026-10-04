@@ -62,6 +62,11 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
 .note { color: var(--muted); font-size: .8125rem; line-height: 1.45; max-width: 60ch; }
 .status { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
 .err { color: var(--amber); }
+.decades { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 10px; margin: 0;
+  display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.decades legend { font-size: .75rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 0 4px; }
+.decades label { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-weight: 600; cursor: pointer; }
+.decades input { width: 20px; height: 20px; accent-color: var(--amber); margin: 0; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
 </style>
@@ -89,6 +94,16 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     <a class="link" id="full" href="#" target="_blank" rel="noopener" hidden>Open full song in Apple Music</a>
     <button type="button" id="am" class="link" hidden>Sign in to Apple Music for full songs</button>
   </div>
+
+  <fieldset class="decades" id="decades">
+    <legend>Decades</legend>
+    <label><input type="checkbox" id="dec-all" checked> All</label>
+    <label><input type="checkbox" data-decade="2020s" checked> 2020s</label>
+    <label><input type="checkbox" data-decade="2010s" checked> 2010s</label>
+    <label><input type="checkbox" data-decade="00s" checked> 00s</label>
+    <label><input type="checkbox" data-decade="90s" checked> 90s</label>
+    <label><input type="checkbox" data-decade="70s80s" checked> 70s/80s</label>
+  </fieldset>
 
   <p class="status" id="status"></p>
   <p class="note">Prototype: Apple's free 30-second previews stand in for full songs. With MusicKit (an Apple Developer account) the same player plays whole tracks, explicit versions included.
@@ -147,6 +162,16 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
   function sessionSet(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   const playable = (n) => !!grid.songs[n - 1].p;
 
+  // Decade filter (user 2026-10-03): checked decades only; years before 1990 are "70s/80s".
+  // Songs without a year ("y") always pass, and nothing checked counts as everything checked.
+  // BEGIN proto-player-lib (tests/test_proto_player.py runs this block)
+  const DECADES = ["2020s", "2010s", "00s", "90s", "70s80s"];
+  const decadeOf = (y) => (y >= 2020 ? "2020s" : y >= 2010 ? "2010s" : y >= 2000 ? "00s" : y >= 1990 ? "90s" : "70s80s");
+  const decadeOk = (n) => {
+    const y = grid.songs[n - 1].y;
+    return !y || decades.size === 0 || decades.has(decadeOf(y));
+  };
+
   // Nearest square (up to ~20 km out) that still has an unplayed song; ring by ring,
   // nearest square first within a ring.
   function findUnplayed(lat, lon) {
@@ -161,12 +186,46 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
       }
       ring.sort((a, b) => a.km - b.km);
       for (const c of ring) {
-        const pool = c.cell.filter(([n]) => playable(n) && !played.has(n));
+        const pool = c.cell.filter(([n]) => playable(n) && !played.has(n) && decadeOk(n));
         if (pool.length) return { pool, km: c.km };
+      }
+    }
+    // Nothing within ~20 km: the coarse NYS + NJ layer (~5 km squares), own square first,
+    // then its 8 neighbours by distance.
+    if (grid.coarse && grid.coarse_step) {
+      const cs = grid.coarse_step, ci = Math.round(lat * cs), cj = Math.round(lon * cs);
+      const near = [];
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        const cell = grid.coarse[`${ci + di}_${cj + dj}`];
+        if (cell && cell.length) near.push({ cell, own: di === 0 && dj === 0, km: Math.hypot(di, dj * kx) * 111.2 / cs });
+      }
+      near.sort((a, b) => a.km - b.km);
+      for (const c of near) {
+        const pool = c.cell.filter(([n]) => playable(n) && !played.has(n) && decadeOk(n));
+        if (pool.length) return { pool, km: c.km, own: c.own, coarse: true };
       }
     }
     return null;
   }
+
+  // END proto-player-lib
+  const savedDecades = store.get("georadio.decades", null);
+  let decades = new Set((Array.isArray(savedDecades) ? savedDecades : DECADES).filter((d) => DECADES.includes(d)));
+
+  const decadeBoxes = [...document.querySelectorAll("#decades input[data-decade]")];
+  function syncDecades() {
+    decadeBoxes.forEach((b) => { b.checked = decades.has(b.dataset.decade); });
+    $("dec-all").checked = decades.size === DECADES.length;
+  }
+  decadeBoxes.forEach((b) => b.addEventListener("change", () => {
+    if (b.checked) decades.add(b.dataset.decade); else decades.delete(b.dataset.decade);
+    store.set("georadio.decades", [...decades]); syncDecades();
+  }));
+  $("dec-all").addEventListener("change", () => {
+    decades = new Set($("dec-all").checked ? DECADES : []);
+    store.set("georadio.decades", [...decades]); syncDecades();
+  });
+  syncDecades();
 
   function pick() {
     if (!here) return null;
@@ -180,7 +239,7 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
     const [n, w] = pool[Math.floor(Math.random() * Math.min(3, pool.length))];
     played.add(n);
     sessionSet("georadio.played", [...played]);
-    return { ...grid.songs[n - 1], n, why: grid.whys[w - 1] || "", km: found.km };
+    return { ...grid.songs[n - 1], n, why: grid.whys[w - 1] || "", km: found.km, ownCoarse: !!(found.coarse && found.own) };
   }
 
   function show(song) {
@@ -212,7 +271,7 @@ button:focus-visible, .link:focus-visible { outline: 3px solid var(--amber); out
       try { audio.pause(); await AM.play(song.id); status("Full song · Apple Music"); return; }
       catch (e) { status("Apple Music couldn't play this one; preview instead."); }
     } else if (globalThis.AM && AM.active) AM.stop();
-    try { await audio.play(); status(song.km > 0.4 ? `Nearest songs: ${song.km.toFixed(1)} km away` : "Song for your block"); }
+    try { await audio.play(); status(song.ownCoarse ? "Song for where you are" : song.km > 0.4 ? `Nearest songs: ${song.km.toFixed(1)} km away` : "Song for your block"); }
     catch (e) { status("Tap Start to begin playback (" + e.name + ").", true); $("start").hidden = false; }
   }
 
